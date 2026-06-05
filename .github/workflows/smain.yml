@@ -1,0 +1,91 @@
+name: RumiOS S7 Edge Android 12 Engine
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_s7_twelve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout Local Repository Structure
+      uses: actions/checkout@v4
+
+    - name: Maximize Runner Storage Space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf /usr/share/swift
+        docker system prune -a -f
+        df -h
+
+    - name: Install Android 12 Compilation Tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf jhead lib32z1-dev libcrypto++-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 libelf-dev
+        sudo ln -sf /usr/bin/python3 /usr/bin/python
+
+    - name: Deploy Secure Isolated Java 11 Environment
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '11'
+
+    - name: Deploy Google Source Repo Binary
+      run: |
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+
+    - name: Initialize LineageOS 19.1 Android 12 Working Tree
+      run: |
+        git config --global user.name "RumiOS-Automated"
+        git config --global user.email "core@rumios.internal"
+        mkdir -p build_workspace
+        cd build_workspace
+        # Initializing the modern Android 12 core framework structure
+        repo init -u https://github.com/LineageOS/android.git -b lineage-19.1 --git-lfs --depth=1
+
+    - name: Inject Verified S7 Edge Hardware Manifests
+      run: |
+        mkdir -p build_workspace/.repo/local_manifests
+        
+        # Pulls directly from the specialized 8890q active repository group
+        cat <<EOF > build_workspace/.repo/local_manifests/roomservice.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <manifest>
+          <project name="8890q/android_device_samsung_hero2lte" path="device/samsung/hero2lte" revision="lineage-19.1" remote="github" />
+          <project name="8890q/android_device_samsung_universal8890-common" path="device/samsung/universal8890-common" revision="lineage-19.1" remote="github" />
+          <project name="8890q/android_kernel_samsung_universal8890" path="kernel/samsung/universal8890" revision="lineage-19.1" remote="github" />
+          <project name="TheMuppets/proprietary_vendor_samsung" path="vendor/samsung" remote="github" revision="lineage-19.1" />
+        </manifest>
+        EOF
+
+    - name: Shallow Sync Android Codebase and Target Components
+      run: |
+        cd build_workspace
+        # Using depth configuration to safely bypass storage capacity errors
+        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --prune --fail-fast
+
+    - name: Execute Cross-Compilation Routine
+      run: |
+        cd build_workspace
+        source build/envsetup.sh
+        export LC_ALL=C
+        export USE_CCACHE=1
+        ccache -M 30G
+        
+        breakfast hero2lte
+        brunch hero2lte
+
+    - name: Extract Flashed Flashable Archive Artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: RumiOS-Android12-Hero2Lte-ZIP
+        path: build_workspace/out/target/product/hero2lte/*.zip
